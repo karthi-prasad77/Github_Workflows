@@ -1,0 +1,76 @@
+name: Check for Unit Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get changed files
+        id: changed_files
+        run: |
+          FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          echo "Changed files:"
+          echo "$FILES"
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Check for test files
+        id: test_check
+        run: |
+          FILES="${{ steps.changed_files.outputs.files }}"
+
+          TEST_FILES=$(echo "$FILES" | grep -iE \
+            '(test|spec)\.(js|ts|py|java|go|rb)$|/(test|tests|spec|__tests__)/' \
+            || true)
+
+          if [ -z "$TEST_FILES" ]; then
+            echo "has_tests=false" >> $GITHUB_OUTPUT
+            echo "❌ No test files found."
+          else
+            echo "has_tests=true" >> $GITHUB_OUTPUT
+            echo "✅ Test files found: $TEST_FILES"
+          fi
+
+      - name: Post comment if no tests found
+        if: steps.test_check.outputs.has_tests == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `## ⚠️ Unit Tests Required
+
+            This PR does not include any unit test files.
+
+            **Unit tests are mandatory** before this PR can be merged.
+
+            **Accepted patterns:**
+            - \`*.test.js\` / \`*.spec.js\`
+            - \`*.test.ts\` / \`*.spec.ts\`
+            - Files inside \`test/\`, \`tests/\`, or \`__tests__/\` folders
+
+            Please add tests and push again.`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body,
+            });
+
+      - name: Fail the check if no tests
+        if: steps.test_check.outputs.has_tests == 'false'
+        run: |
+          echo "::error::No unit test files found in this PR."
+          exit 1
